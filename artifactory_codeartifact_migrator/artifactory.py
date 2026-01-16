@@ -43,35 +43,43 @@ class TimeoutHTTPAdapter(HTTPAdapter):
 retry_strategy = Retry(
     total=10,
     status_forcelist=[429, 500, 502, 503, 504],
-    method_whitelist=["HEAD", "GET", "OPTIONS"],
+    allowed_methods=["HEAD", "GET", "OPTIONS"],
     backoff_factor=1
 )
 
-# Make an API Call to Artifactory and return json
+# Make an API Call to Nexus and return json
 def artifactory_http_call(args, api_path):
   """
-  artifactory_http_call makes an API Call to Artifactory.
+  artifactory_http_call makes an API Call to Nexus (formerly used for Artifactory).
 
   :param args: arguments passed to cli command
   :param api_path: api path to add to url call
   :return: json data of the http response text
   """
-  artifactory_auth = (args.artifactoryuser, args.artifactorypass)
+  nexus_auth = (args.artifactoryuser, args.artifactorypass)
   session = requests.session()
-  session.auth = (
-    artifactory_auth
-  )
+  session.auth = nexus_auth
   session.mount("http://", TimeoutHTTPAdapter(max_retries=retry_strategy))
   session.mount("https://", TimeoutHTTPAdapter(max_retries=retry_strategy))
-  if args.artifactoryprefix:
+  
+  # Add Nexus-specific headers
+  session.headers.update({
+    'accept': 'application/json',
+    'X-Nexus-UI': 'true'
+  })
+  
+  # Build Nexus base URL
+  # Don't apply prefix for REST API paths that start with /service/rest/
+  if api_path.startswith('/service/rest/'):
+    prefix = ""
+  elif args.artifactoryprefix:
     prefix = f"/{args.artifactoryprefix}"
   else:
     prefix = ""
+  
   uri = f"{args.artifactoryprotocol}://{args.artifactoryhost}{prefix}{api_path}"
 
-  response = session.get(
-      uri
-  )
+  response = session.get(uri)
 
   if response.status_code == 200:
     return json.loads(response.text)
@@ -81,74 +89,67 @@ def artifactory_http_call(args, api_path):
 
 def artifactory_package_search(args, package, repository):
   """
-  artifactory_package_search searches Artifactory to verify a package exists.
+  artifactory_package_search searches Nexus to verify a package exists.
 
   :param args: arguments passed to cli command
-  :param package: api path to add to url call
-  :param repository: repository to scans
+  :param package: package name to search for
+  :param repository: repository to scan
   :return: boolean of success
   """
-  
-  package_search = artifactory_http_call(args, '/api/storage/' + repository + '/' + package)
-  success = False
-  if repository + '/' + package in package_search.get('uri'):
-    success = True
-  return success
+  # Use Nexus search endpoint
+  api_path = f"/service/rest/v1/search?repository={repository}&name={package}"
+  try:
+    package_search = artifactory_http_call(args, api_path)
+    if package_search.get('items') and len(package_search['items']) > 0:
+      return True
+  except SystemExit:
+    pass
+  return False
 
 def artifactory_package_binary_search(args, package_dict):
   """
   artifactory_package_binary_search fetches all binaries associated with a
-  package in Artifactory.
+  package in Nexus.
 
   :param args: arguments passed to cli command
   :param package_dict: standard package dictionary to inspect
   :return: list of binary uri's
   """  
   
-  binaries = []  
-  if package_dict['type'] == 'pypi':
+  binaries = []
+  repository = package_dict['repository']
+  package_name = package_dict['package'].split('/')[-1]
+  
+  # Use Nexus search endpoint to find components
+  api_path = f"/service/rest/v1/search?repository={repository}&name={package_name}"
+  
+  try:
+    binary_search = artifactory_http_call(args, api_path)
+  except SystemExit:
+    logger.info(f"No files found in Nexus for {repository} {package_dict['package']}")
+    return binaries
+  
+  if binary_search.get('items'):
+    base_url = f"{args.artifactoryprotocol}://{args.artifactoryhost}"
     if args.artifactoryprefix:
-      prefix = f"/{args.artifactoryprefix}"
-    else:
-      prefix = ""
-    uri = f"{args.artifactoryprotocol}://{args.artifactoryhost}{prefix}/{package_dict['repository']}/{package_dict['package'].split('/')[-1]}"
-    binary_search = artifactory_http_call(args, f"/api/storage/{package_dict['repository']}/{package_dict['package'].split('/')[-1]}?list&deep=1")    
-    if binary_search.get('files'):
-      for i in binary_search.get('files'):
-        if package_dict.get('version'):         
-          if '/' + package_dict.get('version') + '/' in i['uri']:
-            # Avoid files that aren't standard binaries
-            ## ToDo: This should just be a regex search with $ end
-            if '.tar.gz' in i['uri'] or \
-              '.whl' in i['uri'] or \
-              '.egg' in i['uri']:
-              binaries.append(f"{uri}{i['uri']}")
-        else:
-          binaries.append(f"{uri}{i['uri']}")
-    else:
-      logger.info(f"No files found in Artifactory for {package_dict['repository']} {package_dict['package']}")  
+      base_url += f"/{args.artifactoryprefix}"
+    
+    for item in binary_search['items']:
+      # Get component details
+      if package_dict.get('version'):
+        # Filter by version if specified
+        if package_dict['version'] in item.get('version', ''):
+          asset_uri = item.get('assets', [{}])[0].get('downloadUrl', '')
+          if asset_uri:
+            binaries.append(asset_uri)
+      else:
+        # Get all versions if no specific version
+        asset_uri = item.get('assets', [{}])[0].get('downloadUrl', '')
+        if asset_uri:
+          binaries.append(asset_uri)
   else:
-    binary_search = artifactory_http_call(args, '/api/search/artifact?name=' + package_dict['package'].split('/')[-1] + '&repos=' + package_dict['repository'])    
-    for i in binary_search['results']:
-      if '/' + package_dict.get('package') + '/' in i['uri']:
-        if package_dict.get('version'):
-          if package_dict['type'] == 'npm':
-            if package_dict['package'].split('/')[-1] + '-' + package_dict.get('version') + '.tgz' in i['uri']:
-              binaries.append(i['uri'])
-          elif package_dict['type'] in ['pypi', 'maven']:
-            if '/' + package_dict.get('version') + '/' in i['uri']:
-              if not 'maven-metadata.xml' in i['uri']:
-                # Avoid files that aren't standard binaries
-                ## ToDo: This should just be a regex search with $ end
-                if '.pom' in i['uri'] or \
-                  '.jar' in i['uri'] or \
-                  '.tar.gz' in i['uri']:
-                  binaries.append(i['uri'])
-          else:
-            logger.critical(f"ERROR: Package type {package_dict['type']} not supported: {package_dict}")
-            sys.exit(1)
-        else:
-          binaries.append(i['uri'])
+    logger.info(f"No files found in Nexus for {repository} {package_dict['package']}")
+  
   logger.debug(f"Binaries discovered:\n{binaries}")  
   return binaries
 
@@ -197,11 +198,20 @@ def artifactory_binary_fetch(args, package_path, replication_path, folder):
 def artifactory_npm_metadata_fetch(args, package_dict):
   """
   artifactory_npm_metadata_fetch fetches specific npm metadata for a package
-  in Artifactory.
+  in Nexus.
 
   :param args: arguments passed to cli command
   :param package_dict: standard package dictionary to inspect
   :return: json data of http response
   """
-  response = artifactory_http_call(args, '/' + package_dict['repository'] + '/.npm/' + package_dict['package'] + '/package.json')
-  return response
+  # For Nexus, fetch npm package metadata via the npm registry API
+  repo = package_dict['repository']
+  pkg_name = package_dict['package']
+  api_path = f"/{repo}/-/v1/npm/package/{pkg_name}"
+  
+  try:
+    response = artifactory_http_call(args, api_path)
+    return response
+  except SystemExit:
+    logger.warning(f"Could not fetch npm metadata for {pkg_name} in {repo}")
+    return {}

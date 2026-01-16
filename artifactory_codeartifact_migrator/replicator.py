@@ -56,30 +56,36 @@ def get_package_type(repository, artifactory_repos):
   get_package_type fetches the repository package manager type
 
   :param repository: repository name to inspect
-  :param artifactory_repos: dictionary of Artifactory /api/storageinfo repositoriesSummaryList
+  :param artifactory_repos: dictionary of Nexus repositories
   """
   success = False
   for repo in artifactory_repos:
-    if repo['repoKey'] == repository:
+    # Check both 'key' (Nexus) and 'repoKey' (Artifactory) for compatibility
+    repo_key = repo.get('key') or repo.get('repoKey')
+    if repo_key == repository:
       success = True
       repo_to_check = repo
       break
   if not success:
-    logger.critical(f"Repository {repository} not found in Artifactory list retrieved")
+    logger.critical(f"Repository {repository} not found in repository list retrieved")
     sys.exit(1)  
-  if repo_to_check.get('packageType'):
-    if repo_to_check['repoType'] == "LOCAL":
+  
+  # Nexus uses 'type' field, Artifactory uses 'packageType' and 'repoType'
+  if repo_to_check.get('type'):
+    return repo_to_check['type'].lower()
+  elif repo_to_check.get('packageType'):
+    if repo_to_check.get('repoType') == "LOCAL":
       return repo_to_check['packageType'].lower()
   else:
-    logger.critical(f"Repo missing packageType key:\n{str(repo_to_check)}")
+    logger.critical(f"Repo missing type/packageType key:\n{str(repo_to_check)}")
     sys.exit(1)
 
 def check_artifactory_repos(repos, artifactory_repos):
   """
-  check_artifactory_repos verifies a repository is in the api listing from Artifactory
+  check_artifactory_repos verifies a repository is in the API listing from Nexus
 
   :param repos: space seperated list of repositories to check
-  :param artifactory_repos: dictionary of Artifactory /api/storageinfo repositoriesSummaryList
+  :param artifactory_repos: dictionary of Nexus repositories
   """
   success_all = []
   for repo in repos.split(" "):
@@ -88,7 +94,8 @@ def check_artifactory_repos(repos, artifactory_repos):
       'success': False
     }
     for repository in artifactory_repos:
-      if repository['repoKey'] == repo:
+      # Nexus uses 'key' for repo identifier
+      if repository.get('key', '') == repo or repository.get('name', '') == repo:
         success['success'] = True
     success_all.append(success)
   for result in success_all:
@@ -541,26 +548,21 @@ def replicate_repository(args, client, repository, package_type, codeartifact_re
       skip = True
 
   if skip == False:
-    jsondata = artifactory.artifactory_http_call(args, f"/api/storage/{repository}?list&deep=1&listFolders=0")
+    # Use Nexus search endpoint to list all components in repository
+    jsondata = artifactory.artifactory_http_call(args, f"/service/rest/v1/search?repository={repository}")
 
-    for file in jsondata['files']:
+    for item in jsondata.get('items', []):
+      component_name = item.get('name', '')
+      
       if package_type == 'npm':
-        # Avoid .npm metadata folders
-        if not re.search('^/.npm', file['uri']):
-          package_name = re.sub('^/', '', file['uri']).split('/-/')[0]
-          if package_name not in package_list:
-            package_list.append(package_name)
+        # Avoid .npm metadata
+        if component_name and not component_name.startswith('.'):
+          if component_name not in package_list:
+            package_list.append(component_name)
       elif package_type in ['pypi', 'maven']:
-        if not re.search("maven-metadata.xml", file['uri']):
-          uri_strip = re.sub('^/', '', file['uri'])
-          uri_list = uri_strip.split('/')
-          if len(uri_list) > 2:
-            uri_list.pop(-1)
-            uri_list.pop(-1)
-            package_name = '/'.join(uri_list)
-
-            if package_name not in package_list:
-              package_list.append(package_name)
+        if component_name and 'metadata' not in component_name.lower():
+          if component_name not in package_list:
+            package_list.append(component_name)
 
     package_list = sorted(set(package_list))
 
@@ -684,10 +686,17 @@ def replicate(args):
   codeartifact_repos = codeartifact.codeartifact_list_repositories(client)
   logger.debug(f"Codeartifact repo list:\n{codeartifact_repos}")
 
-  # Then we check Artifactory access
-  jsondata = artifactory.artifactory_http_call(args, '/api/storageinfo')
-  artifactory_repos = jsondata['repositoriesSummaryList']
-  logger.debug(f"Artifactory repo list:\n{artifactory_repos}")
+  # Then we check Nexus access (repositories endpoint)
+  jsondata = artifactory.artifactory_http_call(args, '/service/rest/v1/repositories')
+  # Convert Nexus format to Artifactory format for compatibility
+  artifactory_repos = []
+  for repo in jsondata:
+    artifactory_repos.append({
+      'key': repo.get('name', ''),
+      'packageType': repo.get('type', 'unknown'),
+      'type': repo.get('format', 'unknown')
+    })
+  logger.debug(f"Nexus repo list:\n{artifactory_repos}")
 
   if args.packages:
     if args.repositories:
