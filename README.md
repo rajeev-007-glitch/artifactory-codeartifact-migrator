@@ -1,4 +1,5 @@
 # Artifactory CodeArtifact Migrator (ACM)
+
 ## _Making it easy to move from Artifactory to AWS CodeArtifact_
 
 Artifactory CodeArtifact Migrator (ACM) is a tool which enables you to easily move all
@@ -13,7 +14,7 @@ your artifacts from Artifactory to AWS CodeArtifact.
 
 ## Installation
 
-ACM requires Python 3.7 <= version < 3.13 to run. 
+ACM requires Python 3.7 <= version < 3.13 to run.
 
 Using pipenv is the recommended way to install and run ACM.
 
@@ -26,7 +27,7 @@ pipenv install
 Install ACM:
 
 ```sh
-pipenv run python setup.py install
+pipenv run python setup.py install.
 ```
 
 Run ACM:
@@ -72,11 +73,11 @@ option set.
 
 ## DynamoDB
 
-For a small amount of repositories, using the local sqlite caching is fine. 
+For a small amount of repositories, using the local sqlite caching is fine.
 However, if you're moving a lot of artifacts you may want to employ the power of
 DynamoDB for rapid i/o and other features. We've included an option you can use:
-`--dynamodb` which automatically creates DynamoDB tables on the same account 
-your CodeArtifact exists. Keep in mind you should pay attention to permissions 
+`--dynamodb` which automatically creates DynamoDB tables on the same account
+your CodeArtifact exists. Keep in mind you should pay attention to permissions
 for the AWS account being used for the migrator.
 
 If using `--dryrun` all DynamoDB options would happen on the following tables:
@@ -136,7 +137,7 @@ Want to contribute? Great!
 We recommend using the --dryrun option to validate your code executes as desired
 and test on a real CodeArtifact instance for success.
 
-Please update the version in __init__.py and tag a release when updating, based on semver.
+Please update the version in **init**.py and tag a release when updating, based on semver.
 
 ## License
 
