@@ -476,6 +476,13 @@ def replicate_all_package_versions(args, client, token_codeartifact, packagerepo
       logger.info(f"Getting all versions for {package} to populate package dictionary")
       binaries = artifactory.artifactory_package_binary_search(args, package_dict)
       versions = get_artifactory_package_versions(binaries, package_dict)
+    
+      # Skip packages with no versions found
+      if not versions:
+        logger.warning(f"No versions found for package {package} in repository {repository}, skipping")
+        if args.cache:
+          caching.set_all_versions_fetched(args, package, repository, db_file)
+        return True  # Return True to continue processing other packages
       if args.cache:
         caching.set_all_versions_fetched(args, package, repository, db_file)
 
@@ -549,20 +556,37 @@ def replicate_repository(args, client, repository, package_type, codeartifact_re
 
   if skip == False:
     # Use Nexus search endpoint to list all components in repository
-    jsondata = artifactory.artifactory_http_call(args, f"/service/rest/v1/search?repository={repository}")
-
-    for item in jsondata.get('items', []):
-      component_name = item.get('name', '')
+    continuation_token = None
+    
+    while True:
+      # Handle paginated results from Nexus
+      api_path = f"/service/rest/v1/search?repository={repository}"
+      if continuation_token:
+        api_path += f"&continuationToken={continuation_token}"
       
-      if package_type == 'npm':
-        # Avoid .npm metadata
-        if component_name and not component_name.startswith('.'):
-          if component_name not in package_list:
-            package_list.append(component_name)
-      elif package_type in ['pypi', 'maven']:
-        if component_name and 'metadata' not in component_name.lower():
-          if component_name not in package_list:
-            package_list.append(component_name)
+      try:
+        jsondata = artifactory.artifactory_http_call(args, api_path)
+      except SystemExit:
+        logger.warning(f"Failed to fetch package list for repository {repository}")
+        break
+
+      for item in jsondata.get('items', []):
+        component_name = item.get('name', '')
+        
+        if package_type == 'npm':
+          # Avoid .npm metadata
+          if component_name and not component_name.startswith('.'):
+            if component_name not in package_list:
+              package_list.append(component_name)
+        elif package_type in ['pypi', 'maven']:
+          if component_name and 'metadata' not in component_name.lower():
+            if component_name not in package_list:
+              package_list.append(component_name)
+      
+      # Check for pagination
+      continuation_token = jsondata.get('continuationToken')
+      if not continuation_token:
+        break
 
     package_list = sorted(set(package_list))
 

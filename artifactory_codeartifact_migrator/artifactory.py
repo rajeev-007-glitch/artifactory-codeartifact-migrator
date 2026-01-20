@@ -62,15 +62,14 @@ def artifactory_http_call(args, api_path):
   session.mount("http://", TimeoutHTTPAdapter(max_retries=retry_strategy))
   session.mount("https://", TimeoutHTTPAdapter(max_retries=retry_strategy))
   
-  # Add Nexus-specific headers
   session.headers.update({
     'accept': 'application/json',
     'X-Nexus-UI': 'true'
   })
   
   # Build Nexus base URL
-  # Don't apply prefix for REST API paths that start with /service/rest/
-  if api_path.startswith('/service/rest/'):
+  # Don't apply prefix for paths that already include it
+  if api_path.startswith('/service/rest/') or api_path.startswith('/repository/'):
     prefix = ""
   elif args.artifactoryprefix:
     prefix = f"/{args.artifactoryprefix}"
@@ -78,6 +77,8 @@ def artifactory_http_call(args, api_path):
     prefix = ""
   
   uri = f"{args.artifactoryprotocol}://{args.artifactoryhost}{prefix}{api_path}"
+  
+  logger.debug(f"HTTP Call: {uri}")  # Debug logging
 
   response = session.get(uri)
 
@@ -128,29 +129,27 @@ def artifactory_package_binary_search(args, package_dict):
   except SystemExit:
     logger.info(f"No files found in Nexus for {repository} {package_dict['package']}")
     return binaries
-  
+
   if binary_search.get('items'):
-    base_url = f"{args.artifactoryprotocol}://{args.artifactoryhost}"
-    if args.artifactoryprefix:
-      base_url += f"/{args.artifactoryprefix}"
-    
     for item in binary_search['items']:
-      # Get component details
+      assets = item.get('assets', [])
+      if not assets:
+        continue
+
+      # Check version filter once per item
       if package_dict.get('version'):
-        # Filter by version if specified
-        if package_dict['version'] in item.get('version', ''):
-          asset_uri = item.get('assets', [{}])[0].get('downloadUrl', '')
-          if asset_uri:
-            binaries.append(asset_uri)
-      else:
-        # Get all versions if no specific version
-        asset_uri = item.get('assets', [{}])[0].get('downloadUrl', '')
+        if package_dict['version'] not in item.get('version', ''):
+          continue  # Skip this entire component if version doesn't match
+      
+      # Nexus components API returns full downloadUrl - get ALL assets
+      for asset in assets:  # <-- CHANGE: Loop through all assets, not just first
+        asset_uri = asset.get('downloadUrl', '')
         if asset_uri:
           binaries.append(asset_uri)
   else:
     logger.info(f"No files found in Nexus for {repository} {package_dict['package']}")
-  
-  logger.debug(f"Binaries discovered:\n{binaries}")  
+
+  logger.debug(f"Binaries discovered:\n{binaries}")
   return binaries
 
 def artifactory_binary_fetch(args, package_path, replication_path, folder):
@@ -172,6 +171,8 @@ def artifactory_binary_fetch(args, package_path, replication_path, folder):
   )
 
   uri = package_path
+
+  logger.debug(f"Downloading binary from: {uri}")
 
   response = session.get(
       uri
@@ -207,7 +208,7 @@ def artifactory_npm_metadata_fetch(args, package_dict):
   # For Nexus, fetch npm package metadata via the npm registry API
   repo = package_dict['repository']
   pkg_name = package_dict['package']
-  api_path = f"/{repo}/-/v1/npm/package/{pkg_name}"
+  api_path = f"/repository/{repo}/{pkg_name}"
   
   try:
     response = artifactory_http_call(args, api_path)
