@@ -559,10 +559,12 @@ def replicate_repository(args, client, repository, package_type, codeartifact_re
     continuation_token = None
     
     while True:
-      # Handle paginated results from Nexus
+      # Handle paginated results from Nexus - request more items per page
       api_path = f"/service/rest/v1/search?repository={repository}"
       if continuation_token:
         api_path += f"&continuationToken={continuation_token}"
+      
+      logger.info(f"Fetching package list for {repository}...")  # ADD THIS for visibility
       
       try:
         jsondata = artifactory.artifactory_http_call(args, api_path)
@@ -570,6 +572,9 @@ def replicate_repository(args, client, repository, package_type, codeartifact_re
         logger.warning(f"Failed to fetch package list for repository {repository}")
         break
 
+      items_in_page = len(jsondata.get('items', []))  # ADD THIS
+      logger.info(f"Retrieved {items_in_page} items from Nexus")  # ADD THIS
+      
       for item in jsondata.get('items', []):
         component_name = item.get('name', '')
         
@@ -586,6 +591,7 @@ def replicate_repository(args, client, repository, package_type, codeartifact_re
       # Check for pagination
       continuation_token = jsondata.get('continuationToken')
       if not continuation_token:
+        logger.info(f"Finished fetching package list. Total packages: {len(package_list)}")  # ADD THIS
         break
 
     package_list = sorted(set(package_list))
