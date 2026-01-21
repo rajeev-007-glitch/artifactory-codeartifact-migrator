@@ -244,7 +244,17 @@ def codeartifact_upload_npm(token_codeartifact, package_dict, binary):
   :param binary: local binary to upload
   :return: http response object
   """  
-  data = package_dict['metadata']
+  data = package_dict.get('metadata', {})
+  
+  # If metadata is completely empty, build minimal structure
+  if not data:
+    logger.warning(f"No metadata available for {package_dict['package']}. Building minimal metadata from package info.")
+    data = {
+      'name': package_dict['package'],
+      'versions': {},
+      'dist-tags': {'latest': package_dict['version']},
+      'maintainers': [{'name': 'migrated', 'email': 'migrated@example.com'}]
+    }
 
   filename = binary.split('/')[-1]
   file_package = package_dict['package'] + '-' + package_dict['version'] + '.tgz'  
@@ -260,19 +270,24 @@ def codeartifact_upload_npm(token_codeartifact, package_dict, binary):
     
     # _rev key must be removed from metadata before publishing
     data.pop('_rev', None)
+    
+    # Ensure name field exists at root level (required by CodeArtifact)
+    if 'name' not in data:
+      data['name'] = package_dict['package']
 
     # Check if version exists in metadata
     if not data.get('versions', {}).get(package_dict['version']):
-      logger.warning(f"Package {package_dict['package']} version {package_dict['version']} not in metadata. This is normal for scoped packages or new versions. Creating minimal metadata.")
+      logger.warning(f"Package {package_dict['package']} version {package_dict['version']} not in metadata. Creating minimal metadata.")
       
       # Create minimal metadata structure if needed
       if 'versions' not in data:
         data['versions'] = {}
       
-      # Create minimal version metadata
+      # Create minimal version metadata with required fields
       data['versions'][package_dict['version']] = {
         'name': package_dict['package'],
         'version': package_dict['version'],
+        'description': 'Migrated from Nexus',
         'dist': {}
       }
 
