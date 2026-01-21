@@ -21,6 +21,7 @@ import base64
 import requests_toolbelt
 from twine import package as package_file
 from . import monitor
+import hashlib
 
 logger = monitor.getLogger()
 
@@ -126,7 +127,7 @@ def codeartifact_create_repository(args, client, repository):
       domain=args.codeartifactdomain,
       repository=repository
     )
-    logger.debug(f"Reponse for creating {repository} on codeartifact:\n{response}")
+    logger.debug(f"Response for creating {repository} on codeartifact:\n{response}")
 
 def codeartifact_check_create_repo(args, client, repository, codeartifact_repos):
   """
@@ -248,7 +249,15 @@ def codeartifact_upload_npm(token_codeartifact, package_dict, binary):
   filename = binary.split('/')[-1]
   file_package = package_dict['package'] + '-' + package_dict['version'] + '.tgz'  
 
-  with open(binary, "rb") as fp:    
+  with open(binary, "rb") as fp:
+    # Read the binary data for hashing
+    binary_data = fp.read()
+    
+    # Calculate SHA-1 hash (shasum) and SHA-512 (integrity)
+    sha1_hash = hashlib.sha1(binary_data).hexdigest()
+    sha512_hash = hashlib.sha512(binary_data).digest()
+    integrity = 'sha512-' + base64.b64encode(sha512_hash).decode('ascii')
+    
     # _rev key must be removed from metadata before publishing
     data.pop('_rev', None)
 
@@ -267,18 +276,21 @@ def codeartifact_upload_npm(token_codeartifact, package_dict, binary):
         'dist': {}
       }
 
-    # Update tarball location for codeartifact
+    # Update tarball location and hashes for codeartifact
     if 'dist' not in data['versions'][package_dict['version']]:
       data['versions'][package_dict['version']]['dist'] = {}
     
-    data['versions'][package_dict['version']]['dist']['tarball'] = f"{package_dict['endpoint']}{package_dict['package']}/{filename}"
+    dist = data['versions'][package_dict['version']]['dist']
+    dist['tarball'] = f"{package_dict['endpoint']}{package_dict['package']}/{filename}"
+    dist['shasum'] = sha1_hash
+    dist['integrity'] = integrity
 
     # We attach our tarball with details here
     data['_attachments'] = {}
     data['_attachments'][file_package] = {}
     data['_attachments'][file_package]['content_type'] = 'application/octet-stream'
-    data['_attachments'][file_package]['data'] = base64.b64encode(fp.read()).decode('ascii')
-    data['_attachments'][file_package]['length'] = str(os.path.getsize(binary))
+    data['_attachments'][file_package]['data'] = base64.b64encode(binary_data).decode('ascii')
+    data['_attachments'][file_package]['length'] = str(len(binary_data))
 
     # The metadata by default will list all versions, we only want to publish a single version metadata
     version_spec = data['versions'][package_dict['version']]
