@@ -252,12 +252,25 @@ def codeartifact_upload_npm(token_codeartifact, package_dict, binary):
     # _rev key must be removed from metadata before publishing
     data.pop('_rev', None)
 
+    # Check if version exists in metadata
+    if not data.get('versions', {}).get(package_dict['version']):
+      logger.warning(f"Package {package_dict['package']} version {package_dict['version']} not in metadata. This is normal for scoped packages or new versions. Creating minimal metadata.")
+      
+      # Create minimal metadata structure if needed
+      if 'versions' not in data:
+        data['versions'] = {}
+      
+      # Create minimal version metadata
+      data['versions'][package_dict['version']] = {
+        'name': package_dict['package'],
+        'version': package_dict['version'],
+        'dist': {}
+      }
+
     # Update tarball location for codeartifact
-    # logger.debug(f"{package_dict['version']} {package_dict['endpoint']}{package_dict['package']}/{filename}")
-    # logger.debug(f"Data: {data}")
-    if not data['versions'].get(package_dict['version']):
-      logger.warning(f"Package {package_dict['package']} version {package_dict['version']} in repo {package_dict['repository']} not found in metadata. Skipping upload.")
-      return mocked_requests_get()
+    if 'dist' not in data['versions'][package_dict['version']]:
+      data['versions'][package_dict['version']]['dist'] = {}
+    
     data['versions'][package_dict['version']]['dist']['tarball'] = f"{package_dict['endpoint']}{package_dict['package']}/{filename}"
 
     # We attach our tarball with details here
