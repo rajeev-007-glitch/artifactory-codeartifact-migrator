@@ -250,14 +250,17 @@ def codeartifact_upload_npm(token_codeartifact, package_dict, binary):
   if not data:
     logger.warning(f"No metadata available for {package_dict['package']}. Building minimal metadata from package info.")
     data = {
-      'name': package_dict['package'],
+      'name': package_dict['package'],  # Keep full scoped name
       'versions': {},
       'dist-tags': {'latest': package_dict['version']},
       'maintainers': [{'name': 'migrated', 'email': 'migrated@example.com'}]
     }
 
   filename = binary.split('/')[-1]
-  file_package = package_dict['package'] + '-' + package_dict['version'] + '.tgz'  
+  
+  # For scoped packages, only use package name without scope for attachment key
+  package_name_only = package_dict['package'].split('/')[-1] if '/' in package_dict['package'] else package_dict['package']
+  file_package = package_name_only + '-' + package_dict['version'] + '.tgz'
 
   with open(binary, "rb") as fp:
     # Read the binary data for hashing
@@ -271,7 +274,7 @@ def codeartifact_upload_npm(token_codeartifact, package_dict, binary):
     # _rev key must be removed from metadata before publishing
     data.pop('_rev', None)
     
-    # Ensure name field exists at root level (required by CodeArtifact)
+    # Ensure name field exists at root level with FULL scoped name
     if 'name' not in data:
       data['name'] = package_dict['package']
 
@@ -283,9 +286,9 @@ def codeartifact_upload_npm(token_codeartifact, package_dict, binary):
       if 'versions' not in data:
         data['versions'] = {}
       
-      # Create minimal version metadata with required fields
+      # Create minimal version metadata with FULL scoped name
       data['versions'][package_dict['version']] = {
-        'name': package_dict['package'],
+        'name': package_dict['package'],  # Keep @minted/packagename
         'version': package_dict['version'],
         'description': 'Migrated from Nexus',
         'dist': {}
@@ -318,7 +321,8 @@ def codeartifact_upload_npm(token_codeartifact, package_dict, binary):
       ("aws", token_codeartifact)
     )
 
-    url = package_dict['endpoint'] + package_dict['package'].replace('/', '%2f')    
+    # URL encode the package name: @minted/addressbook -> %40minted%2faddressbook
+    url = package_dict['endpoint'] + package_dict['package'].replace('@', '%40').replace('/', '%2f')
 
     response = session.put(
         url,
@@ -330,7 +334,6 @@ def codeartifact_upload_npm(token_codeartifact, package_dict, binary):
   fp.close()  
 
   return response
-
 def convert_data_to_list_of_tuples(data):
   """
   convert_data_to_list_of_tuples converts metadata_dictionary type object to
