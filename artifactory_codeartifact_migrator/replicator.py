@@ -38,7 +38,7 @@ supported_packages = [
 replication_path = '.replication'
 
 # Codeartifact token refresh
-token_refresh = 5 # hours
+token_refresh = 24 # hours
 
 db_file = ""
 
