@@ -88,4 +88,11 @@ else
   command=$command" --procs $ACM_PROCS"
 fi
 
+if [ -z $ARTIFACTORY_PROTOCOL ]; then
+  echo "Protocol not defined, will use default protocol."
+else
+  echo "Protocol defined, will use this value for protocol."
+  command=$command" --artifactoryprotocol $ARTIFACTORY_PROTOCOL"
+fi
+
 $command
