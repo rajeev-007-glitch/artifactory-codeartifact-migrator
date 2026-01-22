@@ -581,8 +581,29 @@ def replicate_repository(args, client, repository, package_type, codeartifact_re
         if package_type == 'npm':
           # Avoid .npm metadata
           if component_name and not component_name.startswith('.'):
+            # For npm packages, try to get the full scoped name from the asset path
+            # Nexus returns unscoped names in search, but assets have the full path
+            assets = item.get('assets', [])
+            if assets and 'downloadUrl' in assets[0]:
+              download_url = assets[0]['downloadUrl']
+              # Extract scoped package name from URL like:
+              # .../repository/npm-minted-hosted/@minted/artist-experience-components/-/...
+              # Pattern: /repository/{repo}/{scope}/{package}/-/{tarball}
+              if '/@' in download_url:
+                try:
+                  # Extract scope and package from URL
+                  url_parts = download_url.split('/repository/')[1]  # Get part after /repository/
+                  path_parts = url_parts.split('/')
+                  # path_parts[1] = @minted, path_parts[2] = package-name
+                  if len(path_parts) >= 3 and path_parts[1].startswith('@'):
+                    scoped_name = path_parts[1] + '/' + path_parts[2]
+                    component_name = scoped_name
+                except Exception as e:
+                  logger.debug(f"Could not extract scoped name from URL {download_url}: {e}")
+            
             if component_name not in package_list:
               package_list.append(component_name)
+        
         elif package_type in ['pypi', 'maven']:
           if component_name and 'metadata' not in component_name.lower():
             if component_name not in package_list:
