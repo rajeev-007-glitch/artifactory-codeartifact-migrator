@@ -581,28 +581,31 @@ def replicate_repository(args, client, repository, package_type, codeartifact_re
         if package_type == 'npm':
           # Avoid .npm metadata
           if component_name and not component_name.startswith('.'):
-            # For npm packages, try to get the full scoped name from the asset path
-            # Nexus returns unscoped names in search, but assets have the full path
+            # For npm packages, ALWAYS try to extract scoped name from download URL first
+            # This ensures we prefer @minted/package over unscoped package
+            scoped_name_found = False
             assets = item.get('assets', [])
-            if assets and 'downloadUrl' in assets[0]:
-              download_url = assets[0]['downloadUrl']
-              # Extract scoped package name from URL like:
-              # .../repository/npm-minted-hosted/@minted/artist-experience-components/-/...
-              # Pattern: /repository/{repo}/{scope}/{package}/-/{tarball}
-              if '/@' in download_url:
-                try:
-                  # Extract scope and package from URL
-                  url_parts = download_url.split('/repository/')[1]  # Get part after /repository/
-                  path_parts = url_parts.split('/')
-                  # path_parts[1] = @minted, path_parts[2] = package-name
-                  if len(path_parts) >= 3 and path_parts[1].startswith('@'):
-                    scoped_name = path_parts[1] + '/' + path_parts[2]
-                    component_name = scoped_name
-                except Exception as e:
-                  logger.debug(f"Could not extract scoped name from URL {download_url}: {e}")
             
+            if assets:
+              download_url = assets[0].get('downloadUrl', '')
+              # Check if this is a scoped package: /@scope/package/-/
+              if '/@' in download_url and '/-/' in download_url:
+                try:
+                  # Extract from: .../repository/npm-minted-hosted/@minted/package-name/-/tarball.tgz
+                  scope_and_package = download_url.split('/@')[1].split('/-/')[0]
+                  component_name = '@' + scope_and_package
+                  scoped_name_found = True
+                  logger.debug(f"Extracted scoped package name: {component_name}")
+                except Exception as e:
+                  logger.debug(f"Could not extract scope from {download_url}: {e}")
+            
+            # Only add if not already in list (avoids duplicates when both scoped and unscoped exist)
             if component_name not in package_list:
               package_list.append(component_name)
+              if scoped_name_found:
+                # If we found a scoped version, also track the unscoped name to skip it later
+                unscoped_name = component_name.split('/')[-1]
+                # We'll filter these out after the loop
         
         elif package_type in ['pypi', 'maven']:
           if component_name and 'metadata' not in component_name.lower():
@@ -612,7 +615,20 @@ def replicate_repository(args, client, repository, package_type, codeartifact_re
       # Check for pagination
       continuation_token = jsondata.get('continuationToken')
       if not continuation_token:
-        logger.info(f"Finished fetching package list. Total packages: {len(package_list)}")  # ADD THIS
+        logger.info(f"Finished fetching package list. Total packages found: {len(package_list)}")
+        
+        # Deduplicate: Remove unscoped versions if scoped version exists
+        if package_type == 'npm':
+          scoped_packages = [p for p in package_list if p.startswith('@')]
+          unscoped_names = [p.split('/')[-1] for p in scoped_packages]
+          
+          # Remove unscoped duplicates
+          original_count = len(package_list)
+          package_list = [p for p in package_list if p.startswith('@') or p not in unscoped_names]
+          
+          if original_count != len(package_list):
+            logger.info(f"Removed {original_count - len(package_list)} duplicate unscoped packages (scoped versions exist)")
+        
         break
 
     package_list = sorted(set(package_list))
