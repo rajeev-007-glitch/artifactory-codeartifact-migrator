@@ -449,61 +449,100 @@ def replicate_all_package_versions(args, client, token_codeartifact, packagerepo
 
   :param args: command line arguments
   :param client: api client to use with codeartifact
-  :param  token_codeartifact: the codeartifact authentication token to use
+  :param token_codeartifact: the codeartifact authentication token to use
   :packagerepo: dictionary of package and repository
   :param db_file: database filename
   """
-  package = packagerepo['package']
+
+  package = packagerepo['package']              # This may be scoped: @minted/auth-library
   repository = packagerepo['repository']
   package_type = packagerepo['package_type']
   endpoint = packagerepo['endpoint']
 
   skip = False
   versions = []
+
+  # ---------------- CACHE CHECK ----------------
   if args.cache:
     if not args.refresh:
       if caching.check_all_versions_fetched(args, package, repository, db_file):
         versions = caching.fetch_all_versions(args, package, repository, db_file)
         skip = True
 
-  if skip == False:
+  # ---------------- FETCH VERSIONS FROM NEXUS ----------------
+  if skip is False:
+
+    search_name = package.split('/')[-1] if '/' in package else package
+
     logger.debug(f"Begin examining package versions: {package}")
-    if not artifactory.artifactory_package_search(args, package, repository):
-      logger.warning(f"Package {package} not found in Artifactory repository {repository}, skipping. This may just be an incorrect parse of the package search return.")
+
+    if not artifactory.artifactory_package_search(args, search_name, repository):
+      logger.warning(
+        f"Package {package} not found in Artifactory repository {repository}, "
+        "skipping. This may just be an incorrect parse of the package search return."
+      )
     else:
       logger.info(f"Package {package} found in Artifactory repository {repository}")
-      package_dict = {'repository': repository, 'package': package, 'type': package_type, 'endpoint': endpoint}
+
+      # Keep ORIGINAL scoped name for publishing later
+      package_dict = {
+        'repository': repository,
+        'package': package,   # scoped name stays here
+        'type': package_type,
+        'endpoint': endpoint
+      }
+
       logger.info(f"Getting all versions for {package} to populate package dictionary")
-      binaries = artifactory.artifactory_package_binary_search(args, package_dict)
+
+      search_dict = package_dict.copy()
+      search_dict['package'] = search_name
+
+      binaries = artifactory.artifactory_package_binary_search(args, search_dict)
+
+      # Extract versions using original scoped name
       versions = get_artifactory_package_versions(binaries, package_dict)
-    
+
       # Skip packages with no versions found
       if not versions:
         logger.warning(f"No versions found for package {package} in repository {repository}, skipping")
         if args.cache:
           caching.set_all_versions_fetched(args, package, repository, db_file)
-        return True  # Return True to continue processing other packages
+        return True
+
       if args.cache:
         caching.set_all_versions_fetched(args, package, repository, db_file)
 
+  # ---------------- PUBLISH TO CODEARTIFACT ----------------
   versions_published = True
+
   if versions == []:
     logger.warning(f"No versions of package {package} were found in Artifactory, skipping.")
   else:
-    logger.debug(f"Versions of package {package}: {versions}")      
+    logger.debug(f"Versions of package {package}: {versions}")
+
     for version in versions:
       if args.cache:
         if not caching.check_package_version(args, package, repository, version, db_file):
           caching.insert_package_version(args, package, repository, version, db_file)
-      package_dict = {'package': package, 'version': version, 'repository': repository, 'type': package_type, 'endpoint': endpoint}
+
+      package_dict = {
+        'package': package,  # scoped name used for publishing
+        'version': version,
+        'repository': repository,
+        'type': package_type,
+        'endpoint': endpoint
+      }
+
       package_dict = append_package_specific_keys(args, package_dict)
 
       status = replicate_package(args, client, token_codeartifact, package_dict, db_file)
-      if status['published'] == False:
+
+      if status['published'] is False:
         versions_published = False
 
+  # ---------------- CACHE PUBLISH STATUS ----------------
   if args.cache:
-    if versions_published == True:
+    if versions_published is True:
       caching.set_all_versions_published(args, package, repository, db_file)
 
   return versions_published
