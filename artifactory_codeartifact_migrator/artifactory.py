@@ -134,6 +134,7 @@ def artifactory_package_binary_search(args, package_dict):
     for item in binary_search['items']:
       assets = item.get('assets', [])
       if not assets:
+        logger.debug(f"No assets found for component {item.get('name')} {item.get('version')}")
         continue
 
       # Check version filter once per item
